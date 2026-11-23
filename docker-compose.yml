@@ -1,0 +1,147 @@
+# Producao (jar empacotado): docker compose up -d --build
+# Desenvolvimento (hot reload): docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+name: gerenciador-de-tarefas
+
+services:
+  # ---------------------------------------------------------------------------
+  # Bancos de dados
+  # ---------------------------------------------------------------------------
+  user-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: userdb
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${USER_DB_PORT:-5433}:5432"
+    volumes:
+      - user-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d userdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - gerenciador-net
+
+  task-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: taskdb
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${TASK_DB_PORT:-5434}:5432"
+    volumes:
+      - task-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d taskdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - gerenciador-net
+
+  notification-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: notificationdb
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${NOTIFICATION_DB_PORT:-5435}:5432"
+    volumes:
+      - notification-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d notificationdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - gerenciador-net
+
+  # ---------------------------------------------------------------------------
+  # Microsservicos
+  # ---------------------------------------------------------------------------
+  user-service:
+    build:
+      context: ./UserService
+      dockerfile: Dockerfile
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://user-db:5432/userdb
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    ports:
+      - "${USER_SERVICE_PORT:-8081}:8080"
+    depends_on:
+      user-db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gerenciador-net
+
+  task-service:
+    build:
+      context: ./TaskService
+      dockerfile: Dockerfile
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://task-db:5432/taskdb
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    ports:
+      - "${TASK_SERVICE_PORT:-8082}:8080"
+    depends_on:
+      task-db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gerenciador-net
+
+  notification-service:
+    build:
+      context: ./NotificationService
+      dockerfile: Dockerfile
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://notification-db:5432/notificationdb
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    ports:
+      - "${NOTIFICATION_SERVICE_PORT:-8083}:8080"
+    depends_on:
+      notification-db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gerenciador-net
+
+  api-gateway:
+    build:
+      context: ./ApiGateway
+      dockerfile: Dockerfile
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      - user-service
+      - task-service
+      - notification-service
+    restart: unless-stopped
+    networks:
+      - gerenciador-net
+
+networks:
+  gerenciador-net:
+    driver: bridge
+
+volumes:
+  user-db-data:
+  task-db-data:
+  notification-db-data:

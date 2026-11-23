@@ -1,0 +1,56 @@
+# Ambiente de desenvolvimento com hot reload.
+#
+# Uso:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# O codigo e montado via bind mount e o Spring Boot DevTools reinicia
+# a aplicacao quando as classes em target/classes mudam. O container
+# permanece de pe; apenas o processo Java e reiniciado.
+#
+# Se a IDE nao compilar automaticamente, rode:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml exec user-service mvn -q compile
+
+x-dev-service: &dev-service
+  build:
+    context: .
+    dockerfile: docker/dev/Dockerfile
+    args:
+      UID: ${UID:-1000}
+      GID: ${GID:-1000}
+  working_dir: /workspace
+  command: ["mvn", "-B", "spring-boot:run"]
+  restart: "no"
+  environment:
+    SPRING_DEVTOOLS_RESTART_ENABLED: "true"
+
+services:
+  user-service:
+    <<: *dev-service
+    image: gerenciador-de-tarefas-user-service-dev
+    volumes:
+      - ./UserService:/workspace
+      - maven-cache:/home/dev/.m2
+
+  task-service:
+    <<: *dev-service
+    image: gerenciador-de-tarefas-task-service-dev
+    volumes:
+      - ./TaskService:/workspace
+      - maven-cache:/home/dev/.m2
+
+  notification-service:
+    <<: *dev-service
+    image: gerenciador-de-tarefas-notification-service-dev
+    volumes:
+      - ./NotificationService:/workspace
+      - maven-cache:/home/dev/.m2
+
+  api-gateway:
+    <<: *dev-service
+    image: gerenciador-de-tarefas-api-gateway-dev
+    volumes:
+      - ./ApiGateway:/workspace
+      - maven-cache:/home/dev/.m2
+
+volumes:
+  maven-cache:

@@ -1,0 +1,30 @@
+# Variaveis de ambiente (o .env.example deve ser versionado)
+.env
+.env.local
+*.env
+!.env.example
+
+# Artefatos de build Maven
+target/
+**/target/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+.factorypath
+.apt_generated
+.springBeans
+.sts4-cache
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
