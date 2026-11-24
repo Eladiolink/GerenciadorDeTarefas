@@ -1,14 +1,12 @@
 # Ambiente de desenvolvimento com hot reload.
 #
 # Uso:
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 #
-# O codigo e montado via bind mount e o Spring Boot DevTools reinicia
-# a aplicacao quando as classes em target/classes mudam. O container
-# permanece de pe; apenas o processo Java e reiniciado.
-#
-# Se a IDE nao compilar automaticamente, rode:
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml exec user-service mvn -q compile
+# O codigo e montado via bind mount. O entrypoint da imagem dev (docker/dev/dev-run.sh)
+# usa inotify para detectar saves em *.java/*.properties/*.xml, roda `mvn compile`
+# e o Spring Boot DevTools reinicia a aplicacao. O container permanece de pe;
+# apenas o contexto Spring e reiniciado, sem rebuild de imagem.
 
 x-dev-service: &dev-service
   build:
@@ -18,10 +16,13 @@ x-dev-service: &dev-service
       UID: ${UID:-1000}
       GID: ${GID:-1000}
   working_dir: /workspace
-  command: ["mvn", "-B", "spring-boot:run"]
   restart: "no"
   environment:
     SPRING_DEVTOOLS_RESTART_ENABLED: "true"
+    # Por padrao o DevTools nao reinicia para arquivos em resources/.
+    # No backend queremos que alteracoes em application.properties tambem
+    # tenham efeito na API sem subir os containers novamente.
+    SPRING_DEVTOOLS_RESTART_EXCLUDE: ""
 
 services:
   user-service:

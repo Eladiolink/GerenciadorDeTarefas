@@ -8,6 +8,6 @@ public class UserController {
 
     @GetMapping("/ping")
     public String hello(){
-        return "pong";
+        return "pong ls noq";
     }
 }

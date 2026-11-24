@@ -79,9 +79,11 @@ GerenciadorDeTarefas/
 │   └── src/
 ├── docker/
 │   └── dev/
-│       └── Dockerfile          # Imagem Maven para o modo de desenvolvimento
+│       ├── Dockerfile          # Imagem Maven + inotify-tools para o modo dev
+│       └── dev-run.sh          # Watch de saves -> mvn compile -> DevTools restart
 ├── docker-compose.yml          # Ambiente de produção (jars empacotados)
 ├── docker-compose.dev.yml      # Override para desenvolvimento com hot reload
+├── Makefile                    # Atalhos: make dev, make logs, make prod, ...
 ├── .env.example                # Modelo das variáveis de ambiente
 ├── .dockerignore
 ├── .gitignore
@@ -166,16 +168,44 @@ As imagens rodam com o usuário `appuser` (sem privilégios) e aproveitam o cach
 
 ## Desenvolvimento com hot reload
 
-O arquivo `docker-compose.dev.yml` sobrescreve os serviços para usar o código do host via bind mount, com o Spring Boot DevTools reiniciando a aplicação a cada recompilação.
+O arquivo `docker-compose.dev.yml` sobrescreve os serviços para usar o código do host via bind mount. Cada container roda `docker/dev/dev-run.sh`, que:
+
+1. compila o projeto na subida;
+2. monitora `src/` e `pom.xml` com `inotifywait`;
+3. a cada save roda `mvn compile` (atualizando `target/classes`);
+4. o Spring Boot DevTools detecta a mudança no classpath e reinicia **apenas o contexto da aplicação**.
+
+Ou seja: **salve o `.java` no editor e a API já reflete a alteração**, sem `docker compose up` e sem depender da IDE compilar.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+make dev          # ou: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
-O código-fonte de cada serviço é montado em `/workspace` e as dependências do Maven ficam no volume `maven-cache`. Se a IDE não compilar automaticamente, force a compilação dentro do container:
+Acompanhe o hot reload pelos logs:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml exec user-service mvn -q compile
+make logs-service SERVICE=user-service
+# [hotreload] alteração detectada — recompilando workspace...
+# [hotreload] compilação OK — o Spring DevTools vai reiniciar a aplicação
+```
+
+O código-fonte de cada serviço é montado em `/workspace` e as dependências do Maven ficam no volume `maven-cache`. Para forçar uma compilação manualmente:
+
+```bash
+make compile SERVICE=user-service
+```
+
+### Atalhos com Makefile
+
+Na raiz do projeto, `make help` lista todos os comandos. Os principais:
+
+```bash
+make dev          # sobe tudo com hot reload
+make logs         # logs de todos os serviços
+make ps           # status dos containers
+make ping         # testa GET /localhost:8081/ping
+make dev-down     # para o stack (mantém os dados dos bancos)
+make prod         # volta para jars de produção (sem hot reload)
 ```
 
 > No modo de desenvolvimento, os containers usam o UID/GID do usuário local (`UID` e `GID` no `.env`) para evitar arquivos criados como `root` na pasta `target/`.
