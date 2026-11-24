@@ -54,5 +54,5 @@ compile: ## Forca mvn compile em um servico (SERVICE=user-service)
 shell: ## Abre um shell no container de um servico (SERVICE=user-service)
 	$(COMPOSE_DEV) exec $(SERVICE) bash
 
-ping: ## Testa o endpoint /ping do UserService
-	@curl -s -w ' HTTP %{http_code}\n' http://localhost:8081/ping
+ping: ## Testa o endpoint /user/ping pelo API Gateway
+	@curl -s -w ' HTTP %{http_code}\n' http://localhost:8080/user/ping

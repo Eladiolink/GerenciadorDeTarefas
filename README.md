@@ -2,7 +2,7 @@
 
 Sistema de gerenciamento de tarefas baseado em microsserviços com **Java 25**, **Spring Boot 4.2.0** e **PostgreSQL 17**, totalmente containerizado com Docker Compose.
 
-> **Status:** projeto em desenvolvimento. A estrutura dos microsserviços, os bancos de dados e o ambiente Docker já estão funcionais; as regras de negócio e as rotas do API Gateway ainda estão sendo implementadas.
+> **Status:** projeto em desenvolvimento. A estrutura dos microsserviços, os bancos de dados, o ambiente Docker, o roteamento do API Gateway e a autenticação JWT já estão funcionais; as regras de negócio ainda estão sendo implementadas.
 
 ## Sumário
 
@@ -15,6 +15,7 @@ Sistema de gerenciamento de tarefas baseado em microsserviços com **Java 25**, 
 - [Como executar](#como-executar)
 - [Desenvolvimento com hot reload](#desenvolvimento-com-hot-reload)
 - [Testando os serviços](#testando-os-serviços)
+- [Autenticação JWT](#autenticação-jwt)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Decisões de arquitetura](#decisões-de-arquitetura)
 - [Segurança](#segurança)
@@ -41,7 +42,15 @@ flowchart LR
 - **NotificationService**: envio e registro de notificações.
 - **Database per service**: cada microsserviço possui seu próprio banco PostgreSQL e volume persistente.
 
-> As rotas do API Gateway para os microsserviços ainda não estão configuradas. Por enquanto, apenas o endpoint `/ping` do `UserService` está implementado.
+O API Gateway roteia pelo prefixo do path, preservando o caminho original:
+
+| Prefixo no gateway | Serviço de destino | URI interna |
+| --- | --- | --- |
+| `/user/**` | `user-service` | `http://user-service:8080` |
+| `/task/**` | `task-service` | `http://task-service:8080` |
+| `/notification/**` | `notification-service` | `http://notification-service:8080` |
+
+As URIs podem ser sobrescritas pelas variáveis `USER_SERVICE_URI`, `TASK_SERVICE_URI` e `NOTIFICATION_SERVICE_URI` (útil para rodar o gateway fora do Docker). Por enquanto, apenas o endpoint `/user/ping` do `UserService` está implementado.
 
 ## Tecnologias
 
@@ -53,6 +62,7 @@ flowchart LR
 | Persistência | Spring Data JPA / Hibernate |
 | Banco de dados | PostgreSQL 17 (Alpine) |
 | Segurança | Spring Security |
+| Autenticação | JWT HS256 (Spring Security Resource Server) |
 | Build | Maven (Maven Wrapper incluído) |
 | Containerização | Docker multi-stage + Docker Compose |
 | Produtividade | Lombok, Spring Boot DevTools, Actuator (Gateway) |
@@ -203,7 +213,7 @@ Na raiz do projeto, `make help` lista todos os comandos. Os principais:
 make dev          # sobe tudo com hot reload
 make logs         # logs de todos os serviços
 make ps           # status dos containers
-make ping         # testa GET /localhost:8081/ping
+make ping         # testa GET /user/ping pelo API Gateway
 make dev-down     # para o stack (mantém os dados dos bancos)
 make prod         # volta para jars de produção (sem hot reload)
 ```
@@ -212,14 +222,89 @@ make prod         # volta para jars de produção (sem hot reload)
 
 ## Testando os serviços
 
-O `UserService` expõe um endpoint público de verificação:
+O `UserService` expõe um endpoint público de verificação. Acesse pelo API Gateway (ponto de entrada único):
 
 ```bash
-curl http://localhost:8081/ping
+curl http://localhost:8080/user/ping
 # resposta: pong
 ```
 
-Os demais endpoints de negócio ainda serão implementados. O API Gateway está disponível em `http://localhost:8080`, mas ainda sem rotas configuradas.
+O mesmo endpoint também pode ser testado diretamente no serviço:
+
+```bash
+curl http://localhost:8081/user/ping
+```
+
+Os demais endpoints de negócio ainda serão implementados. Requisições para `/task/**` e `/notification/**` já são encaminhadas aos respectivos serviços e exigem um token JWT válido.
+
+## Autenticação JWT
+
+O fluxo é stateless e descentralizado:
+
+1. O `UserService` cadastra o usuário com a senha protegida por **BCrypt**.
+2. No login, o `UserService` assina um token **HS256** com o segredo compartilhado `JWT_SECRET`.
+3. O API Gateway valida o token antes de encaminhar a requisição.
+4. Cada microsserviço valida o token novamente (defesa em profundidade) e extrai as authorities da claim `roles`.
+5. O token vai no header `Authorization: Bearer <token>`.
+
+Claims emitidas: `sub` (username), `userId`, `roles`, `iss` (`user-service`), `iat` e `exp`.
+
+| Método | Rota | Acesso |
+| --- | --- | --- |
+| `POST` | `/auth/register` | Público |
+| `POST` | `/auth/login` | Público |
+| `GET` | `/user/ping` | Público |
+| `GET` | `/user/me` | Requer JWT |
+| `GET` | `/task/ping` | Requer JWT |
+| `GET` | `/notification/ping` | Requer JWT |
+
+### Passo a passo
+
+**1. Registre um usuário** (a resposta já traz um token):
+
+```bash
+curl -X POST http://localhost:8080/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"senha123"}'
+```
+
+```json
+{
+  "accessToken": "eyJraWQiOiJ...",
+  "tokenType": "Bearer",
+  "expiresIn": 3600
+}
+```
+
+**2. Faça login e guarde o token em uma variável** (requer `jq`):
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8080/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"senha123"}' | jq -r .accessToken)
+```
+
+**3. Acesse um endpoint protegido:**
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/user/me
+# {"username":"alice","userId":1,"roles":["ROLE_USER"]}
+
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/task/ping
+# pong task
+
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/notification/ping
+# pong notification
+```
+
+**4. Confirme que sem token o acesso é negado:**
+
+```bash
+curl -i http://localhost:8080/task/ping
+# HTTP/1.1 401
+```
+
+Os mesmos testes podem ser feitos diretamente nos serviços (`:8081`, `:8082` e `:8083`), pois todos validam o JWT de forma independente do gateway.
 
 ## Variáveis de ambiente
 
@@ -227,12 +312,18 @@ Os demais endpoints de negócio ainda serão implementados. O API Gateway está 
 | --- | --- | --- |
 | `POSTGRES_USER` | `postgres` | Usuário dos bancos PostgreSQL |
 | `POSTGRES_PASSWORD` | `postgres` | Senha dos bancos PostgreSQL |
+| `JWT_SECRET` | `dev-secret-key-with-at-least-32-characters-change-me` | Segredo HMAC compartilhado (mínimo 32 caracteres) |
+| `JWT_EXPIRATION_MINUTES` | `60` | Validade do token em minutos |
+| `JWT_ISSUER` | `user-service` | Emissor esperado na claim `iss` |
 | `UID` | `1000` | UID do usuário local (modo dev) |
 | `GID` | `1000` | GID do usuário local (modo dev) |
 | `GATEWAY_PORT` | `8080` | Porta do API Gateway no host |
 | `USER_SERVICE_PORT` | `8081` | Porta do UserService no host |
 | `TASK_SERVICE_PORT` | `8082` | Porta do TaskService no host |
 | `NOTIFICATION_SERVICE_PORT` | `8083` | Porta do NotificationService no host |
+| `USER_SERVICE_URI` | `http://user-service:8080` | URI interna do UserService usada pelo gateway |
+| `TASK_SERVICE_URI` | `http://task-service:8080` | URI interna do TaskService usada pelo gateway |
+| `NOTIFICATION_SERVICE_URI` | `http://notification-service:8080` | URI interna do NotificationService usada pelo gateway |
 | `USER_DB_PORT` | `5433` | Porta do banco `userdb` no host |
 | `TASK_DB_PORT` | `5434` | Porta do banco `taskdb` no host |
 | `NOTIFICATION_DB_PORT` | `5435` | Porta do banco `notificationdb` no host |
@@ -246,12 +337,17 @@ As configurações de conexão dos serviços são injetadas pelo `docker-compose
 - **Healthchecks nos bancos:** os microsserviços só iniciam após o banco correspondente estar saudável (`depends_on` com `condition: service_healthy`).
 - **Hibernate `ddl-auto=update`:** usado no ambiente atual para criar/atualizar o schema automaticamente. Para produção, o recomendado é adotar migrations versionadas (Flyway ou Liquibase).
 - **Multi-stage build:** imagem final enxuta com apenas o JRE e execução como usuário sem privilégios.
+- **JWT descentralizado:** o `UserService` emite os tokens e todos os serviços os validam localmente com o segredo compartilhado, sem estado de sessão.
+- **Senhas com BCrypt:** as senhas nunca são armazenadas em texto puro.
 - **Persistência:** os dados dos bancos ficam nos volumes nomeados `user-db-data`, `task-db-data` e `notification-db-data`.
 
 ## Segurança
 
-- O `UserService` permite acesso público apenas ao endpoint `/ping`; demais requisições exigem autenticação básica.
-- CSRF está desabilitado no `UserService` por se tratar de uma API REST.
+- Apenas `/auth/**`, `/user/ping` e `/actuator/health` são públicos; as demais rotas exigem um JWT válido.
+- Os serviços são stateless: nenhuma sessão HTTP é criada (`SessionCreationPolicy.STATELESS`) e CSRF está desabilitado por se tratar de uma API REST.
+- As senhas são armazenadas com hash BCrypt.
+- O `JWT_SECRET` padrão é apenas para desenvolvimento. **Defina um segredo forte e exclusivo no `.env` antes de qualquer uso real.**
+- Para produção, considere evoluir de HS256 para RSA/EC com JWKS ou um Authorization Server dedicado (ex.: Spring Authorization Server/Keycloak), permitindo rotação de chaves.
 - As credenciais padrão (`postgres`/`postgres`) são apenas para desenvolvimento. **Altere-as no `.env` antes de qualquer uso real.**
 - O `.env` não é versionado; apenas o `.env.example` é mantido no repositório.
 
@@ -261,10 +357,10 @@ As configurações de conexão dos serviços são injetadas pelo `docker-compose
 - [x] Dockerfiles multi-stage com execução como usuário não-root
 - [x] Docker Compose para produção e desenvolvimento (hot reload)
 - [x] Um banco PostgreSQL isolado por serviço
-- [x] Endpoint público `/ping` no `UserService`
-- [ ] Configuração das rotas no API Gateway
+- [x] Endpoint público `/user/ping` no `UserService`
+- [x] Configuração das rotas no API Gateway
 - [ ] CRUD de usuários, tarefas e notificações
-- [ ] Autenticação e autorização com JWT
+- [x] Autenticação e autorização com JWT
 - [ ] Migrations de banco com Flyway ou Liquibase
 - [ ] Testes de integração entre os serviços
 - [ ] CI/CD e publicação das imagens
